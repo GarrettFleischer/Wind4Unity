@@ -9,6 +9,7 @@
 #pragma once
 
 #include <JuceHeader.h>
+#include <random>
 
 //==============================================================================
 /**
@@ -120,8 +121,17 @@ public:
     }
 
     //==============================================================================
-    void getStateInformation(juce::MemoryBlock& destData) override;
-    void setStateInformation(const void* data, int sizeInBytes) override;
+    void getStateInformation(juce::MemoryBlock& destData) override
+    {
+        // You should use this method to store your parameters in the memory block.
+        // You could do that either as raw data, or use the XML or ValueTree classes
+        // as intermediaries to make it easy to save and load complex data.
+    }
+    void setStateInformation(const void* data, int sizeInBytes) override
+    {
+        // You should use this method to restore your parameters from this memory block,
+        // whose contents will have been created by the getStateInformation() call.
+    }
 
 private:
     // Wind Methods
@@ -129,14 +139,20 @@ private:
     void dstProcess(juce::AudioBuffer<float>& buffer);
     void dstUpdateSettings();
 
+    float randomNormal();
+    void windSpeedSet();
+
     // Global Params
     juce::AudioParameterFloat* gain;
 
     // Distant Wind params
-    juce::AudioParameterFloat* dstBPCutoffFreq;
-    juce::AudioParameterFloat* dstBPQ;
+    // juce::AudioParameterFloat* dstBPCutoffFreq;
+    // juce::AudioParameterFloat* dstBPQ;
     juce::AudioParameterFloat* dstAmplitude;
 
+    // Wind Speed params
+    juce::AudioParameterInt* windForce;
+    
     juce::dsp::Oscillator<float> dstNoise1
     {
         [](float x)
@@ -147,6 +163,22 @@ private:
     };
 
     juce::dsp::StateVariableTPTFilter<float> dstBPF;
+
+    // RNG
+    std::normal_distribution<double> distribution{};
+    std::default_random_engine generator;
+
+    // wind speed arrays
+    float meanWS[13] { 0.0f, 1.0f, 2.0f, 4.0f, 6.0f, 9.0f, 12.0f, 15.0f, 18.0f, 22.0f, 26.0f, 30.0f, 34.0f };
+    float sdWS[13] { 0.0f, 0.125f, 0.25f, 0.5f, 0.75f, 1.125f, 1.5f, 1.875f, 2.25f, 2.75f, 3.25f, 3.75f, 4.25f };
+
+    // Internal vars
+    juce::dsp::ProcessSpec currentSpec;
+    float currentWindSpeed { 0.0f };
+    float deltaWindSpeed { 0.0f };
+    float targetWindSpeed { 0.0f };
+    int currentWSComponentCounter { 0 };
+    int targetWSComponentCount { 0 };
 
     //==============================================================================
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(Wind4UnityAudioProcessor)

@@ -17,14 +17,22 @@ Wind4UnityAudioProcessor::Wind4UnityAudioProcessor()
     addParameter(gain = new juce::AudioParameterFloat(
         "Master Gain", "Master Gain", 0.0f, 1.0f, 0.5f));
 
-    addParameter(dstBPCutoffFreq = new juce::AudioParameterFloat(
-        "DstCutoff", "DistantIntensity", 0.004f, 1000.0f, 10.0f));
-
-    addParameter(dstBPQ = new juce::AudioParameterFloat(
-        "DstQ", "DistantQ", 1.0f, 100.0f, 10.0f));
+    // addParameter(dstBPCutoffFreq = new juce::AudioParameterFloat(
+    //     "DstCutoff", "DistantIntensity", 0.004f, 1000.0f, 10.0f));
+    //
+    // addParameter(dstBPQ = new juce::AudioParameterFloat(
+    //     "DstQ", "DistantQ", 1.0f, 100.0f, 10.0f));
 
     addParameter(dstAmplitude = new juce::AudioParameterFloat(
         "DstAmp", "DistantAmplitude", 0.0001f, 1.5f, 0.75f));
+
+    addParameter(windForce = new juce::AudioParameterInt(
+        "Wind Force", "Wind Force", 0, 12, 3));
+
+    int seed = static_cast<int>(std::chrono::system_clock::now().time_since_epoch().count());
+    generator.seed(seed);
+
+    windSpeedSet();
 }
 
 Wind4UnityAudioProcessor::~Wind4UnityAudioProcessor()
@@ -39,6 +47,8 @@ void Wind4UnityAudioProcessor::prepareToPlay(double sampleRate, int samplesPerBl
         static_cast<uint32_t>(samplesPerBlock),
         static_cast<uint32_t>(getTotalNumOutputChannels())
     };
+
+    currentSpec = spec;
 
     dstPrepare(spec);
 }
@@ -58,6 +68,11 @@ void Wind4UnityAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, ju
 
     buffer.clear();
 
+    if(++currentWSComponentCounter > targetWSComponentCount)
+        windSpeedSet();
+    else
+        currentWindSpeed += deltaWindSpeed;
+
     dstUpdateSettings();
     dstProcess(buffer);
 
@@ -76,18 +91,6 @@ juce::AudioProcessorEditor* Wind4UnityAudioProcessor::createEditor()
 }
 
 //==============================================================================
-void Wind4UnityAudioProcessor::getStateInformation(juce::MemoryBlock& destData)
-{
-    // You should use this method to store your parameters in the memory block.
-    // You could do that either as raw data, or use the XML or ValueTree classes
-    // as intermediaries to make it easy to save and load complex data.
-}
-
-void Wind4UnityAudioProcessor::setStateInformation(const void* data, int sizeInBytes)
-{
-    // You should use this method to restore your parameters from this memory block,
-    // whose contents will have been created by the getStateInformation() call.
-}
 
 void Wind4UnityAudioProcessor::dstPrepare(const juce::dsp::ProcessSpec& spec)
 {
@@ -95,8 +98,10 @@ void Wind4UnityAudioProcessor::dstPrepare(const juce::dsp::ProcessSpec& spec)
 
     dstBPF.prepare(spec);
     dstBPF.setType(juce::dsp::StateVariableTPTFilterType::bandpass);
-    dstBPF.setCutoffFrequency(dstBPCutoffFreq->get());
-    dstBPF.setResonance(dstBPQ->get());
+    // dstBPF.setCutoffFrequency(dstBPCutoffFreq->get());
+    // dstBPF.setResonance(dstBPQ->get());
+    dstBPF.setCutoffFrequency(10.0f);
+    dstBPF.setResonance(1.0f);
     dstBPF.reset();
 }
 
@@ -118,8 +123,39 @@ void Wind4UnityAudioProcessor::dstProcess(juce::AudioBuffer<float>& buffer)
 
 void Wind4UnityAudioProcessor::dstUpdateSettings()
 {
-    dstBPF.setCutoffFrequency(dstBPCutoffFreq->get());
-    dstBPF.setResonance(dstBPQ->get());
+    // dstBPF.setCutoffFrequency(dstBPCutoffFreq->get());
+    // dstBPF.setResonance(dstBPQ->get());
+
+    if (currentWindSpeed < 0)
+        currentWindSpeed = 0;
+
+    dstBPF.setCutoffFrequency(currentWindSpeed * 30.0f + 0.004f);
+    dstBPF.setResonance(currentWindSpeed * 0.2f + 0.01f);
+}
+
+float Wind4UnityAudioProcessor::randomNormal()
+{
+    return distribution(generator);
+}
+
+void Wind4UnityAudioProcessor::windSpeedSet()
+{
+    int force = windForce->get();
+    if(force == 0)
+    {
+        // update every second
+        targetWindSpeed = 0.0f;
+        targetWSComponentCount = (int)(currentSpec.sampleRate / currentSpec.maximumBlockSize);
+    }
+    else
+    {
+        // the stronger the force, the more erratic the length of time is
+        targetWindSpeed = meanWS[force] + sdWS[force] * randomNormal();
+        targetWSComponentCount = (int)(10.0f + 2.0f * randomNormal() / (force / 2.0f) * currentSpec.sampleRate / currentSpec.maximumBlockSize);
+    }
+
+    currentWSComponentCounter = 0;
+    deltaWindSpeed = (targetWindSpeed - currentWindSpeed) / (float)targetWSComponentCount;
 }
 
 //==============================================================================
