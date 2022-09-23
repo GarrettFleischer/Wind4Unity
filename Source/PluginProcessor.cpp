@@ -14,40 +14,33 @@ Wind4UnityAudioProcessor::Wind4UnityAudioProcessor()
         .withOutput("Output", juce::AudioChannelSet::stereo(), true)
     )
 {
+    // Global params
     addParameter(gain = new juce::AudioParameterFloat(
-        "Master Gain", "Master Gain", 0.0f, 1.0f, 0.5f));
+        "gain", "Master Gain", 0.0f, 1.0f, 0.5f));
 
-    // addParameter(dstBPCutoffFreq = new juce::AudioParameterFloat(
-    //     "DstCutoff", "DistantIntensity", 0.004f, 1000.0f, 10.0f));
-    //
-    // addParameter(dstBPQ = new juce::AudioParameterFloat(
-    //     "DstQ", "DistantQ", 1.0f, 100.0f, 10.0f));
-
+    // Wind Params
     addParameter(dstAmplitude = new juce::AudioParameterFloat(
-        "DstAmp", "DistantAmplitude", 0.0001f, 1.5f, 0.75f));
-
-    addParameter(windForce = new juce::AudioParameterInt(
-        "Wind Force", "Wind Force", 0, 12, 3));
-
-    addParameter(gustActive = new juce::AudioParameterBool(
-        "Gust Active", "Gust Active", false));
-
-    addParameter(gustDepth = new juce::AudioParameterFloat(
-        "Gust Depth", "Gust Depth", 0.0f, 1.0f, 0.5f));
-
-    addParameter(gustInterval = new juce::AudioParameterFloat(
-        "Gust Interval", "Gust Interval", 0.0f, 1.0f, 0.5f));
-
-    addParameter(squallActive = new juce::AudioParameterBool(
-        "Squall Active", "Squall Active", false));
-
-    addParameter(squallDepth = new juce::AudioParameterFloat(
-        "Squall Depth", "Squall Depth", 0.0f, 1.0f, 0.5f));
-
-    int seed = static_cast<int>(std::chrono::system_clock::now().time_since_epoch().count());
-    generator.seed(seed);
-
-    windSpeedSet();
+    "dstAmplitude", "Distant Gain", 0.0001f, 1.5f, 0.75f));
+    addParameter(windSpeed = new juce::AudioParameterFloat(
+    "windSpeed", "Wind Speed", 0.01f, 40.0f, 1.0f));
+    addParameter(dstIntensity = new juce::AudioParameterFloat(
+    "dstIntensity", "Intensity", 1.0f, 50.0f, 30.0f));
+    addParameter(dstResonance = new juce::AudioParameterFloat(
+    "dstResonance", "Resonance", 0.1f, 50.0f, 1.0f));
+    addParameter(dstPan = new juce::AudioParameterFloat(
+        "dstPan", "Distant Pan", 0.0f, 1.0f, 0.5f));
+    addParameter(whsAmplitude = new juce::AudioParameterFloat(
+        "WhsAmp", "Whistle Gain", 0.0001f, 1.5f, 0.75f));
+    addParameter(whsPan1 = new juce::AudioParameterFloat(
+        "WhsPan1", "Whistle Pan1", 0.0f, 1.0f, 0.5f));
+    addParameter(whsPan2 = new juce::AudioParameterFloat(
+        "WhsPan2", "Whistle Pan2", 0.0f, 1.0f, 0.5f));
+    addParameter(howlAmplitude = new juce::AudioParameterFloat(
+        "HowlAmp", "Howl Gain", 0.0001f, 1.5f, 0.75f));
+    addParameter(howlPan1 = new juce::AudioParameterFloat(
+        "HowlPan1", "Howl Pan1", 0.0f, 1.0f, 0.5f));
+    addParameter(howlPan2 = new juce::AudioParameterFloat(
+        "HowlPan2", "Howl Pan2", 0.0f, 1.0f, 0.5f));
 }
 
 Wind4UnityAudioProcessor::~Wind4UnityAudioProcessor()
@@ -57,15 +50,13 @@ Wind4UnityAudioProcessor::~Wind4UnityAudioProcessor()
 
 void Wind4UnityAudioProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
 {
-    const juce::dsp::ProcessSpec spec{
+    currentSpec = juce::dsp::ProcessSpec {
         sampleRate,
         static_cast<uint32_t>(samplesPerBlock),
-        static_cast<uint32_t>(getTotalNumOutputChannels())
+        1
     };
 
-    currentSpec = spec;
-
-    dstPrepare(spec);
+    prepare(currentSpec);
 }
 
 void Wind4UnityAudioProcessor::releaseResources()
@@ -83,19 +74,10 @@ void Wind4UnityAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, ju
 
     buffer.clear();
 
-    if (++currentWSComponentCounter > targetWSComponentCount)
-        windSpeedSet();
-    else
-        currentWindSpeed += deltaWindSpeed;
-
-    if (gustActive->get() || gustStatus == Closing)
-        computeGust();
-    else if (gustStatus == Active)
-        gustClose();
-
-
-    dstUpdateSettings();
+    updateSettings();
     dstProcess(buffer);
+    whsProcess(buffer);
+    howlProcess(buffer);
 
     buffer.applyGain(gain->get());
 }
@@ -103,7 +85,7 @@ void Wind4UnityAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, ju
 //==============================================================================
 bool Wind4UnityAudioProcessor::hasEditor() const
 {
-    return true; // (change this to false if you choose to not supply an editor)
+    return true;
 }
 
 juce::AudioProcessorEditor* Wind4UnityAudioProcessor::createEditor()
@@ -113,210 +95,169 @@ juce::AudioProcessorEditor* Wind4UnityAudioProcessor::createEditor()
 
 //==============================================================================
 
-void Wind4UnityAudioProcessor::dstPrepare(const juce::dsp::ProcessSpec& spec)
+void Wind4UnityAudioProcessor::prepare(const juce::dsp::ProcessSpec& spec)
 {
-    dstNoise1.prepare(spec);
-
+    //    Prepare DST
     dstBPF.prepare(spec);
     dstBPF.setType(juce::dsp::StateVariableTPTFilterType::bandpass);
-    // dstBPF.setCutoffFrequency(dstBPCutoffFreq->get());
-    // dstBPF.setResonance(dstBPQ->get());
     dstBPF.setCutoffFrequency(10.0f);
     dstBPF.setResonance(1.0f);
     dstBPF.reset();
+
+    //    Prepare Whistle
+    whsBPF1.prepare(spec);
+    whsBPF1.setType(juce::dsp::StateVariableTPTFilterType::bandpass);
+    whsBPF1.setCutoffFrequency(1000.0f);
+    whsBPF1.setResonance(60.0f);
+    whsBPF1.reset();
+
+    whsBPF2.prepare(spec);
+    whsBPF2.setType(juce::dsp::StateVariableTPTFilterType::bandpass);
+    whsBPF2.setCutoffFrequency(1000.0f);
+    whsBPF2.setResonance(60.0f);
+    whsBPF2.reset();
+
+    //    Prepare Howl
+    howlBPF1.prepare(spec);
+    howlBPF1.setType(juce::dsp::StateVariableTPTFilterType::bandpass);
+    howlBPF1.setCutoffFrequency(400.0f);
+    howlBPF1.setResonance(40.0f);
+    howlBPF1.reset();
+
+    howlBPF2.prepare(spec);
+    howlBPF2.setType(juce::dsp::StateVariableTPTFilterType::bandpass);
+    howlBPF2.setCutoffFrequency(200.0f);
+    howlBPF2.setResonance(40.0f);
+    howlBPF2.reset();
+
+    howlOsc1.initialise([](float x) { return std::sin(x); }, 128);
+    howlOsc2.initialise([](float x) { return std::sin(x); }, 128);
+
+    howlBlockLPF1.prepare(0.5f, spec.maximumBlockSize, spec.sampleRate);
+    howlBlockLPF2.prepare(0.4f, spec.maximumBlockSize, spec.sampleRate);
 }
 
 void Wind4UnityAudioProcessor::dstProcess(juce::AudioBuffer<float>& buffer)
 {
-    int numSamples = buffer.getNumSamples();
-    int numChannels = buffer.getNumChannels();
-    float dstFrameAmp = dstAmplitude->get();
+    //    Get Buffer info
+    const int numSamples = buffer.getNumSamples();
+    const float FrameAmp = dstAmplitude->get();
 
-    for (int ch = 0; ch < numChannels; ++ch)
+    //    Distant Wind DSP Loop
+    float pan[2];
+    cosPan(pan, dstPan->get());
+
+    for (int s = 0; s < numSamples; ++s)
     {
-        for (int s = 0; s < numSamples; ++s)
-        {
-            float output = dstBPF.processSample(ch, dstNoise1.processSample(0.0f));
-            buffer.addSample(ch, s, output * dstFrameAmp);
-        }
+        const float output = dstBPF.processSample(0, r.nextFloat() * 2.0f - 1.0f) * FrameAmp;
+        buffer.addSample(0, s, output * pan[0]);
+        buffer.addSample(1, s, output * pan[1]);
     }
+  
+    dstBPF.snapToZero();
 }
 
-void Wind4UnityAudioProcessor::dstUpdateSettings()
+void Wind4UnityAudioProcessor::whsProcess(juce::AudioBuffer<float>& buffer)
 {
-    // dstBPF.setCutoffFrequency(dstBPCutoffFreq->get());
-    // dstBPF.setResonance(dstBPQ->get());
+    const int numSamples = buffer.getNumSamples();
+    const float FrameAmp = whsAmplitude->get();
 
-    if (currentWindSpeed < 0)
-        currentWindSpeed = 0;
+    //    Whistle DSP Loop
+    float pan1[2];
+    cosPan(pan1, pd.whistlePan1);
+    float pan2[2];
+    cosPan(pan2, pd.whistlePan2);
+    const float ampMod1 = juce::square(juce::jmax(0.0f, wd.whsWindSpeed1 * 0.02f - 0.1f));
+    const float ampMod2 = juce::square(juce::jmax(0.0f, wd.whsWindSpeed2 * 0.02f - 0.1f));
 
-    dstBPF.setCutoffFrequency(juce::jlimit (0.004f, 1500.0f, currentWindSpeed + currentGust) * 30.0f);
-    dstBPF.setResonance(1.0f + log(juce::jmax(1.0f, (currentWindSpeed + currentGust) * 0.1f)));
-}
-
-float Wind4UnityAudioProcessor::randomNormal()
-{
-    return distribution(generator);
-}
-
-void Wind4UnityAudioProcessor::windSpeedSet()
-{
-    int force = windForce->get();
-    if (force == 0)
+    for (int s = 0; s < numSamples; ++s)
     {
-        // update every second
-        targetWindSpeed = 0.0f;
-        targetWSComponentCount = static_cast<int>(currentSpec.sampleRate / currentSpec.maximumBlockSize);
-    }
-    else
-    {
-        // the stronger the force, the more erratic the length of time is
-        targetWindSpeed = meanWS[force] + sdWS[force] * randomNormal();
-        targetWSComponentCount = static_cast<int>(10.0f + 2.0f * randomNormal() / (force / 2.0f) * currentSpec.
-            sampleRate / currentSpec.maximumBlockSize);
+        const float noiseOutput = r.nextFloat() * 2.0f - 1.0f;
+        const float output1 = whsBPF1.processSample(0, noiseOutput) * FrameAmp * ampMod1;
+        const float output2 = whsBPF2.processSample(0, noiseOutput) * FrameAmp * ampMod2;
+        buffer.addSample(0, s, output1 * pan1[0] + output2 * pan2[0]);
+        buffer.addSample(1, s, output1 * pan1[1] + output2 * pan2[1]);
     }
 
-    currentWSComponentCounter = 0;
-    deltaWindSpeed = (targetWindSpeed - currentWindSpeed) / static_cast<float>(targetWSComponentCount);
+    whsBPF1.snapToZero();
+    whsBPF2.snapToZero();
 }
 
-void Wind4UnityAudioProcessor::computeGust()
+void Wind4UnityAudioProcessor::howlProcess(juce::AudioBuffer<float>& buffer)
 {
-    if (!gustWasActive)
+    const int numSamples = buffer.getNumSamples();
+    const float FrameAmp = howlAmplitude->get();
+
+    //    Howl DSP Loop
+    float pan1[2];
+    cosPan(pan1, pd.howlPan1);
+    float pan2[2];
+    cosPan(pan2, pd.howlPan2);
+    const float ampMod1 = howlBlockLPF1.processSample(juce::dsp::FastMathApproximations::cos(
+        ((juce::jlimit(0.35f, 0.6f, hd.howlWindSpeed1 * 0.02f)
+         - 0.35f) * 2.0f - 0.25f) * juce::MathConstants<float>::twoPi));
+    const float ampMod2 = howlBlockLPF2.processSample( juce::dsp::FastMathApproximations::cos(
+        ((juce::jlimit(0.25f, 0.5f, hd.howlWindSpeed2 * 0.02f) 
+         - 0.25f) * 2.0f - 0.25f) * juce::MathConstants<float>::twoPi));
+    howlOsc1.setFrequency(ampMod1 * 200.0f + 30.0f);
+    howlOsc2.setFrequency(ampMod2 * 100.0f + 20.0f);
+    for (int s = 0; s < numSamples; ++s)
     {
-        gustIntervalSet();
-        return;
+        const float noiseOutput = r.nextFloat() * 2.0f - 1.0f;
+        const float output1 = howlBPF1.processSample(0, noiseOutput) * FrameAmp * ampMod1 * howlOsc1.processSample(0.0f);
+        const float output2 = howlBPF2.processSample(0, noiseOutput) * FrameAmp * ampMod2 * howlOsc2.processSample(0.0f);
+        buffer.addSample(0, s, output1 * pan1[0] + output2 * pan2[0]);
+        buffer.addSample(1, s, output1 * pan1[1] + output2 * pan2[1]);
     }
 
-    if (gustStatus == Waiting)
-    {
-        if (++currentGustIntervalCounter > targetGustIntervalCount)
-        {
-            if (squallActive->get())
-            {
-                squallSet();
-                squallLengthSet();
-            }
-            else
-            {
-                gustSet();
-                gustLengthSet();
-            }
-        }
-
-        return;
-    }
-
-    if (gustStatus == Active)
-    {
-        if (++currentGustLengthCounter > targetGustLengthCount)
-        {
-            gustClose();
-            return;
-        }
-
-        if (++currentGustComponentCounter > targetGustComponentCount)
-        {
-            if (squallActive->get())
-            {
-                squallSet();
-            }
-            else
-            {
-                gustSet();
-            }
-        }
-        else
-        {
-            currentGust += deltaGust;
-        }
-        return;
-    }
-
-    if (gustStatus == Closing)
-    {
-        if (++currentGustComponentCounter > targetGustComponentCount)
-        {
-            gustWasActive = false;
-            gustStatus = Off;
-            currentGust = 0.0f;
-            return;
-        }
-        currentGust += deltaGust;
-    }
+    howlBPF1.snapToZero();
+    howlBPF2.snapToZero();
 }
 
-void Wind4UnityAudioProcessor::gustSet()
+void Wind4UnityAudioProcessor::updateSettings()
 {
-    int force = windForce->get();
-    if (force < 3)
-    {
-        gustClose();
-        return;
-    }
-    targetGust = 15.0f * gustDepth->get() + 2.0f * sdWS[force] * randomNormal();
-    targetGustComponentCount = static_cast<int>((1.0f + 0.25f * randomNormal()) / (force / 2.0f) * currentSpec.
-        sampleRate / currentSpec.
-        maximumBlockSize);
-    targetGustComponentCount = juce::jmax(targetGustComponentCount, 1);
+    //  UpdateWSCircularBuffer;
+    const float currentWindSpeed = windSpeed->get();
+    gd.windSpeedCircularBuffer[gd.wSCBWriteIndex] = currentWindSpeed;
+    ++gd.wSCBWriteIndex;
+    gd.wSCBWriteIndex = (gd.wSCBWriteIndex < wSCBSize) ? gd.wSCBWriteIndex : 0;
 
-    currentGustComponentCounter = 0;
-    deltaGust = (targetGust - currentGust) / static_cast<float>(targetGustComponentCount);
-    gustStatus = Active;
+    // Get Pan Data
+    pd.whistlePan1 = whsPan1->get();
+    pd.whistlePan2 = whsPan2->get();
+    pd.howlPan1 = howlPan1->get();
+    pd.howlPan2 = howlPan2->get();
+
+    // Update DST
+    const float currentDstIntensity = dstIntensity->get();
+    const float currentDstResonance = dstResonance->get();
+    // Update DST Filter Settings
+    dstBPF.setCutoffFrequency(currentWindSpeed * currentDstIntensity);
+    dstBPF.setResonance(currentDstResonance);
+
+    // Update Whistle
+    wd.whsWSCBReadIndex1 = gd.wSCBWriteIndex - (int)(pd.whistlePan1 * maxPanFrames);
+    wd.whsWSCBReadIndex1 = (wd.whsWSCBReadIndex1 < 0) ? wd.whsWSCBReadIndex1 + wSCBSize : wd.whsWSCBReadIndex1;
+    wd.whsWSCBReadIndex2 = gd.wSCBWriteIndex - (int)(pd.whistlePan2 * maxPanFrames);
+    wd.whsWSCBReadIndex2 = (wd.whsWSCBReadIndex2 < 0) ? wd.whsWSCBReadIndex2 + wSCBSize : wd.whsWSCBReadIndex2;
+    wd.whsWindSpeed1 = gd.windSpeedCircularBuffer[wd.whsWSCBReadIndex1];
+    wd.whsWindSpeed2 = gd.windSpeedCircularBuffer[wd.whsWSCBReadIndex2];
+    whsBPF1.setCutoffFrequency(wd.whsWindSpeed1 * 8.0f + 600.0f);
+    whsBPF2.setCutoffFrequency(wd.whsWindSpeed2 * 20.0f + 1000.0f);
+
+    //    Update Howl
+    hd.howlWSCBReadIndex1 = gd.wSCBWriteIndex - (int)(pd.howlPan1 * maxPanFrames);
+    hd.howlWSCBReadIndex1 = (hd.howlWSCBReadIndex1 < 0) ? hd.howlWSCBReadIndex1 + wSCBSize : hd.howlWSCBReadIndex1;
+    hd.howlWSCBReadIndex2 = gd.wSCBWriteIndex - (int)(pd.howlPan2 * maxPanFrames);
+    hd.howlWSCBReadIndex2 = (hd.howlWSCBReadIndex2 < 0) ? hd.howlWSCBReadIndex2 + wSCBSize : hd.howlWSCBReadIndex2;
+    hd.howlWindSpeed1 = gd.windSpeedCircularBuffer[hd.howlWSCBReadIndex1];
+    hd.howlWindSpeed2 = gd.windSpeedCircularBuffer[hd.howlWSCBReadIndex2];
 }
 
-void Wind4UnityAudioProcessor::squallSet()
+void Wind4UnityAudioProcessor::cosPan(float* output, float pan)
 {
-    int force = windForce->get();
-    if (force < 3)
-    {
-        gustClose();
-        return;
-    }
-    
-    targetGust = 20.0f * squallDepth->get() + 2.0f * sdWS[force] * randomNormal();
-    targetGustComponentCount = static_cast<int>((0.75f + 0.25f * randomNormal()) / (force / 2.0f) * currentSpec.
-        sampleRate / currentSpec.
-        maximumBlockSize);
-    targetGustComponentCount = juce::jmax(targetGustComponentCount, 1);
-
-    currentGustComponentCounter = 0;
-    deltaGust = (targetGust - currentGust) / static_cast<float>(targetGustComponentCount);
-    gustStatus = Active;
-}
-
-void Wind4UnityAudioProcessor::gustClose()
-{
-    targetGust = 0.0f;
-    targetGustComponentCount = static_cast<int>(2 * currentSpec.sampleRate / currentSpec.maximumBlockSize);
-    currentGustComponentCounter = 0;
-    deltaGust = (targetGust - currentGust) / static_cast<float>(targetGustComponentCount);
-    gustStatus = Closing;
-}
-
-void Wind4UnityAudioProcessor::gustIntervalSet()
-{
-    currentGustIntervalCounter = 0;
-    targetGustIntervalCount = (int)((5.0f + gustInterval->get() * 100.0f + 10.0f * randomNormal()) * currentSpec.sampleRate / currentSpec.maximumBlockSize);
-    targetGustIntervalCount = juce::jmax(targetGustIntervalCount, 1);
-    gustStatus = Waiting;
-    gustWasActive = true;
-}
-
-void Wind4UnityAudioProcessor::gustLengthSet()
-{
-    currentGustLengthCounter = 0;
-    targetGustLengthCount = (int)((5.0f + 1.5f * randomNormal()) * currentSpec.sampleRate / currentSpec.maximumBlockSize);
-    targetGustLengthCount = juce::jmax(targetGustLengthCount, 1);
-    gustStatus = Active;
-}
-
-void Wind4UnityAudioProcessor::squallLengthSet()
-{
-    currentGustLengthCounter = 0;
-    targetGustLengthCount = (int)((30.0f + 5.0f * randomNormal()) * currentSpec.sampleRate / currentSpec.maximumBlockSize);
-    targetGustLengthCount = juce::jmax(targetGustLengthCount, 1);
-    gustStatus = Active;
+    output[0] = juce::dsp::FastMathApproximations::cos((pan * 0.25f - 0.5f) * juce::MathConstants<float>::twoPi);
+    output[1] = juce::dsp::FastMathApproximations::cos((pan * 0.25f - 0.25f) * juce::MathConstants<float>::twoPi);
 }
 
 //==============================================================================

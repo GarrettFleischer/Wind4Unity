@@ -5,6 +5,9 @@
               pluginFormats="buildStandalone,buildUnity">
   <MAINGROUP id="n8Ptny" name="Wind4Unity">
     <GROUP id="{6B4CC097-B5DA-41C3-8C4A-53C9162727F6}" name="Source">
+      <FILE id="Q29nBH" name="BlockLPF.cpp" compile="1" resource="0" file="Source/BlockLPF.cpp"/>
+      <FILE id="qiO71A" name="BlockLPF.h" compile="0" resource="0" file="Source/BlockLPF.h"/>
+      <FILE id="l4eDsQ" name="MathF.h" compile="0" resource="0" file="Source/MathF.h"/>
       <FILE id="QK7lSH" name="PluginProcessor.cpp" compile="1" resource="0"
             file="Source/PluginProcessor.cpp"/>
       <FILE id="uYZOvF" name="PluginProcessor.h" compile="0" resource="0"

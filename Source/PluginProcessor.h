@@ -9,7 +9,8 @@
 #pragma once
 
 #include <JuceHeader.h>
-#include <random>
+
+#include "BlockLPF.h"
 
 //==============================================================================
 /**
@@ -137,86 +138,91 @@ public:
         // whose contents will have been created by the getStateInformation() call.
     }
 
-    enum GustStatus
+    // enum GustStatus
+    // {
+    //     Off,
+    //     Waiting,
+    //     Active,
+    //     Closing
+    // };
+
+    static const int wSCBSize = 500;
+    static const int numOutputChannels = 2;
+    static const int maxPanFrames = 20;
+
+    struct GlobalData
     {
-        Off,
-        Waiting,
-        Active,
-        Closing
+        float windSpeedCircularBuffer[wSCBSize];
+        int wSCBWriteIndex{0};
     };
 
+    struct WhistleData
+    {
+        int whsWSCBReadIndex1 = wSCBSize - 6;
+        int whsWSCBReadIndex2 = wSCBSize - 16;
+        float whsWindSpeed1;
+        float whsWindSpeed2;
+    };
+
+    struct HowlData
+    {
+        int howlWSCBReadIndex1 = wSCBSize - 6;
+        int howlWSCBReadIndex2 = wSCBSize - 51;
+        float howlWindSpeed1;
+        float howlWindSpeed2;
+    };
+    
+    struct PanData
+    {
+        float whistlePan1;
+        float whistlePan2;
+        float howlPan1;
+        float howlPan2;
+    };
+    
 private:
     // Wind Methods
-    void dstPrepare(const juce::dsp::ProcessSpec& spec);
+    void prepare(const juce::dsp::ProcessSpec& spec);
     void dstProcess(juce::AudioBuffer<float>& buffer);
-    void dstUpdateSettings();
+    void whsProcess(juce::AudioBuffer<float>& buffer);
+    void howlProcess(juce::AudioBuffer<float>& buffer);
+    void updateSettings();
+    void cosPan(float* output, float pan);
 
-    float randomNormal();
-    void windSpeedSet();
-
-    // gusts and squalls
-    void computeGust();
-    void gustSet();
-    void squallSet();
-    void gustClose();
-    void gustIntervalSet();
-    void gustLengthSet();
-    void squallLengthSet();
-
-    // Global Params
     juce::AudioParameterFloat* gain;
+    juce::AudioParameterFloat* windSpeed;
 
-    // Distant Wind params
-    // juce::AudioParameterFloat* dstBPCutoffFreq;
-    // juce::AudioParameterFloat* dstBPQ;
     juce::AudioParameterFloat* dstAmplitude;
+    juce::AudioParameterFloat* dstIntensity;
+    juce::AudioParameterFloat* dstResonance;
+    juce::AudioParameterFloat* dstPan;
 
-    // Wind Speed params
-    juce::AudioParameterInt* windForce;
-    juce::AudioParameterBool* gustActive;
-    juce::AudioParameterFloat* gustDepth;
-    juce::AudioParameterFloat* gustInterval;
-    juce::AudioParameterBool* squallActive;
-    juce::AudioParameterFloat* squallDepth;
+    juce::AudioParameterFloat* whsPan1;
+    juce::AudioParameterFloat* whsPan2;
+    juce::AudioParameterFloat* whsAmplitude;
+    WhistleData wd;
+    
+    juce::AudioParameterFloat* howlPan1;
+    juce::AudioParameterFloat* howlPan2;
+    juce::AudioParameterFloat* howlAmplitude;
+    HowlData hd;
 
-    juce::dsp::Oscillator<float> dstNoise1
-    {
-        [](float x)
-        {
-            juce::Random r;
-            return r.nextFloat() * 2.0f - 1.0f;
-        }
-    };
-
+    juce::Random r;
     juce::dsp::StateVariableTPTFilter<float> dstBPF;
+    
+    juce::dsp::StateVariableTPTFilter<float> whsBPF1;
+    juce::dsp::StateVariableTPTFilter<float> whsBPF2;
 
-    // RNG
-    std::normal_distribution<double> distribution{};
-    std::default_random_engine generator;
+    juce::dsp::StateVariableTPTFilter<float> howlBPF1;
+    juce::dsp::StateVariableTPTFilter<float> howlBPF2;
+    juce::dsp::Oscillator<float> howlOsc1;
+    juce::dsp::Oscillator<float> howlOsc2;
+    Wind4Unity::BlockLPF howlBlockLPF1;
+    Wind4Unity::BlockLPF howlBlockLPF2;
 
-    // wind speed arrays
-    float meanWS[13]{0.0f, 1.0f, 2.0f, 4.0f, 6.0f, 9.0f, 12.0f, 15.0f, 18.0f, 22.0f, 26.0f, 30.0f, 34.0f};
-    float sdWS[13]{0.0f, 0.125f, 0.25f, 0.5f, 0.75f, 1.125f, 1.5f, 1.875f, 2.25f, 2.75f, 3.25f, 3.75f, 4.25f};
-
-    // Internal vars
     juce::dsp::ProcessSpec currentSpec;
-    float currentWindSpeed{0.0f};
-    float deltaWindSpeed{0.0f};
-    float targetWindSpeed{0.0f};
-    int currentWSComponentCounter{0};
-    int targetWSComponentCount{0};
-
-    float currentGust{0.0f};
-    float deltaGust{0.0f};
-    float targetGust{0.0f};
-    int currentGustComponentCounter{0};
-    int targetGustComponentCount{0};
-    int currentGustLengthCounter{0};
-    int targetGustLengthCount{0};
-    int currentGustIntervalCounter{0};
-    int targetGustIntervalCount{0};
-    GustStatus gustStatus;
-    bool gustWasActive{false};
+    GlobalData gd;
+    PanData pd;
 
     //==============================================================================
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(Wind4UnityAudioProcessor)
